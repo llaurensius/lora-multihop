@@ -16,6 +16,16 @@
 #define DEBUG_PRINTLN(x)   if(DEBUG_MODE) { Serial.println(x); }
 #define DEBUG_PRINTF(...)  if(DEBUG_MODE) { Serial.printf(__VA_ARGS__); }
 
+// Measurement Current
+// ===================================================
+SoftwareSerial mySerial2(14, 0); // RX, TX
+String dataMeasurement = "";
+void dataLogMeasurement();
+// ===================================================
+// End of Measurement Current
+
+
+
 // Setup existing
 // ===================================================
 
@@ -32,7 +42,7 @@ RTClib myRTC;
 // SD Card
 const int CS = 5;
 
-// Software Serial
+// Software Serial Existing
 SoftwareSerial mySerial(16, 17);
 SoftwareSerial mySerial1(35, 34);
 
@@ -209,6 +219,7 @@ void setup() {
     Serial.begin(115200);
     mySerial.begin(9600);
     mySerial1.begin(9600);
+    mySerial2.begin(115200);
     Wire.begin();  
 
     // Fungsi LED
@@ -218,7 +229,7 @@ void setup() {
     FastLED.show();
     
     // Inisialisasi SD Card
-    // initSDCard();
+    initSDCard();
 
     while (!Serial && millis() < 5000);
     
@@ -242,6 +253,8 @@ void setup() {
 }
 
 void loop() {
+
+    dataLogMeasurement();
 
     ledFunction();
     int packetSize = LoRa.parsePacket();
@@ -773,3 +786,50 @@ void ledFunction() {
 }
 // ===================================================
 // End of existing function code
+
+// Measurement Current
+// ===================================================
+void dataLogMeasurement(){
+    if (mySerial2.available() > 0){
+        dataMeasurement = mySerial2.readStringUntil('\n');
+    }
+    DateTime now = myRTC.now();
+    
+    String getMonthStr = now.getMonth() < 10 ? "0" + String(now.getMonth()) : String(now.getMonth());
+    String getDayStr = now.getDay() < 10 ? "0" + String(now.getDay()) : String(now.getDay());
+    
+    // Ganti karakter yang tidak valid dengan garis bawah (_)
+    String frequencyStr = String(FREQUENCY/1E6);
+    frequencyStr.replace(".", "_"); // Ganti titik dengan garis bawah
+    String bandwidthStr = String(BANDWIDTH/1E3);
+    bandwidthStr.replace(".", "_"); // Ganti titik dengan garis bawah
+    
+    String namaFile = getDayStr + getMonthStr + String(now.getYear(), DEC) + 
+                      "_Frequency_" + frequencyStr + "MHz" + 
+                      "_Bandwidth_" + bandwidthStr + 
+                      "_TxPower_" + String(TX_POWER) + "dBm" + 
+                      "_SpreadingFactor_" + String(SPREADING_FACTOR);
+    
+    File myFile10 = SD.open("/datalog/" + namaFile + ".txt", FILE_APPEND);
+    if (myFile10) {
+      myFile10.print(now.getYear(), DEC);
+      myFile10.print("-");
+      myFile10.print(now.getMonth(), DEC);
+      myFile10.print("-");
+      myFile10.print(now.getDay(), DEC);
+      myFile10.print(" ");
+      myFile10.print(now.getHour(), DEC);
+      myFile10.print(":");
+      myFile10.print(now.getMinute(), DEC);
+      myFile10.print(":");
+      myFile10.print(now.getSecond(), DEC);
+      myFile10.print(", ");
+      myFile10.print(dataMeasurement);
+      myFile10.println("");
+      myFile10.close();
+    } else {
+      Serial.println("Data log measurement error");
+    }
+}
+// ===================================================
+// End of Measurement Current
