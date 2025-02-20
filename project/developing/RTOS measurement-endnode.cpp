@@ -16,6 +16,16 @@
 #define DEBUG_PRINTLN(x)   if(DEBUG_MODE) { Serial.println(x); }
 #define DEBUG_PRINTF(...)  if(DEBUG_MODE) { Serial.printf(__VA_ARGS__); }
 
+// Measurement Current
+// ===================================================
+SoftwareSerial mySerial2(14, 0); // RX, TX
+String dataMeasurement = "";
+void dataLogMeasurement();
+// ===================================================
+// End of Measurement Current
+
+
+
 // Setup existing
 // ===================================================
 
@@ -32,7 +42,7 @@ RTClib myRTC;
 // SD Card
 const int CS = 5;
 
-// Software Serial
+// Software Serial Existing
 SoftwareSerial mySerial(16, 17);
 SoftwareSerial mySerial1(35, 34);
 
@@ -90,7 +100,7 @@ uint16_t calculateCRC(uint8_t *data, uint8_t len) {
 #define SYNC_WORD 0x12     
 
 // Node configuration
-#define NODE_ID 2           // Set for end node
+#define NODE_ID 1           // Set for end node
 #define GATEWAY_ID 0      // Set for gateway       
 #define MAX_HOPS 3         
 #define RETRY_COUNT 3      
@@ -129,7 +139,6 @@ struct LoRaMessage {
     uint8_t destinationId;
     uint8_t hopCount;      
     uint8_t messageId;
-    uint8_t lastHopId;
     char payload[32];
 } __attribute__((packed));
 
@@ -210,6 +219,7 @@ void setup() {
     Serial.begin(115200);
     mySerial.begin(9600);
     mySerial1.begin(9600);
+    mySerial2.begin(115200);
     Wire.begin();  
 
     // Fungsi LED
@@ -243,6 +253,8 @@ void setup() {
 }
 
 void loop() {
+
+    dataLogMeasurement();
 
     ledFunction();
     int packetSize = LoRa.parsePacket();
@@ -294,19 +306,15 @@ bool sendMessage(LoRaMessage& msg) {
             return false;
         }
     }
-    
     if (msg.hopCount >= MAX_HOPS) {
         DEBUG_PRINTLN("Maximum hop count exceeded");
         return false;
     }
     
-    // Set lastHopId sebelum mengirim
-    msg.lastHopId = NODE_ID;
-    
     for (int i = 0; i < RETRY_COUNT; i++) {
         DEBUG_PRINTF("Transmission attempt %d/%d\n", i + 1, RETRY_COUNT);
-        DEBUG_PRINTF("Sending message - Type: %d, ID: %d, Source: %d, LastHop: %d, Dest: %d\n",
-            msg.messageType, msg.messageId, msg.sourceId, msg.lastHopId, msg.destinationId);
+        DEBUG_PRINTF("Sending message - Type: %d, ID: %d, Dest: %d\n",
+            msg.messageType, msg.messageId, msg.destinationId);
         
         LoRa.beginPacket();
         LoRa.write((uint8_t*)&msg, sizeof(LoRaMessage));
@@ -314,9 +322,16 @@ bool sendMessage(LoRaMessage& msg) {
         if (LoRa.endPacket()) {
             DEBUG_PRINTLN("Packet sent. Waiting for ACK...");
             DEBUG_PRINTF("RSSI: %d, SNR: %.2f\n", 
-                        LoRa.packetRssi(),
+/*************  ✨ Codeium Command ⭐  *************/
+/**
+ * Parse string berisi credentials WiFi dan connect ke WiFi.
+ * Format string: "n<ssid>xx<password>z"
+ * Jika format valid, maka akan connect ke WiFi dan mengatur flag sd_isi = true.
+ * Jika tidak valid, maka tidak ada aksi apapun.
+ * @param input string berisi credentials WiFi
+ */
+/******  f0eb80f7-8350-456e-a14a-d9bfeb017840  *******/                        LoRa.packetRssi(),
                         LoRa.packetSnr());
-            
             if (msg.messageType == MSG_TYPE_DATA) {
                 if (waitForAck(msg.messageId)) {
                     DEBUG_PRINTLN("ACK received");
@@ -332,6 +347,8 @@ bool sendMessage(LoRaMessage& msg) {
             DEBUG_PRINTF("Last RSSI: %d, Last SNR: %.2f\n", 
                         LoRa.packetRssi(),
                         LoRa.packetSnr());
+            // Uncomment jika ingin mencoba reset LoRa pada kegagalan
+            // resetLoRa();
         }
         
         delay(random(500, 1500));
@@ -379,10 +396,8 @@ void receiveMessage(int packetSize) {
                 DEBUG_PRINTLN("==================");
             } else if (msg.hopCount < MAX_HOPS) {
                 msg.hopCount++;
-                msg.lastHopId = NODE_ID;
                 sendMessage(msg);
                 metrics.messagesForwarded++;
-                DEBUG_PRINTF("Forwarding message from Node %d via Node %d\n", msg.sourceId, NODE_ID);
             }
             break;
             
@@ -391,7 +406,6 @@ void receiveMessage(int packetSize) {
                 sendRouteResponse(msg.sourceId);
             } else if (msg.hopCount < MAX_HOPS) {
                 msg.hopCount++;
-                msg.lastHopId = NODE_ID;
                 LoRa.beginPacket();
                 LoRa.write((uint8_t*)&msg, sizeof(LoRaMessage));
                 LoRa.endPacket();
@@ -401,12 +415,6 @@ void receiveMessage(int packetSize) {
         case MSG_TYPE_ROUTE_RESPONSE:
             if (msg.destinationId == NODE_ID) {
                 hasValidRoute = true;
-            }
-            break;
-            
-        case MSG_TYPE_ACK:
-            if (msg.destinationId == NODE_ID) {
-                DEBUG_PRINTF("ACK received for message ID: %d\n", msg.messageId);
             }
             break;
     }
@@ -778,3 +786,50 @@ void ledFunction() {
 }
 // ===================================================
 // End of existing function code
+
+// Measurement Current
+// ===================================================
+void dataLogMeasurement(){
+    if (mySerial2.available() > 0){
+        dataMeasurement = mySerial2.readStringUntil('\n');
+    }
+    DateTime now = myRTC.now();
+    
+    String getMonthStr = now.getMonth() < 10 ? "0" + String(now.getMonth()) : String(now.getMonth());
+    String getDayStr = now.getDay() < 10 ? "0" + String(now.getDay()) : String(now.getDay());
+    
+    // Ganti karakter yang tidak valid dengan garis bawah (_)
+    String frequencyStr = String(FREQUENCY/1E6);
+    frequencyStr.replace(".", "_"); // Ganti titik dengan garis bawah
+    String bandwidthStr = String(BANDWIDTH/1E3);
+    bandwidthStr.replace(".", "_"); // Ganti titik dengan garis bawah
+    
+    String namaFile = getDayStr + getMonthStr + String(now.getYear(), DEC) + 
+                      "_Frequency_" + frequencyStr + "MHz" + 
+                      "_Bandwidth_" + bandwidthStr + 
+                      "_TxPower_" + String(TX_POWER) + "dBm" + 
+                      "_SpreadingFactor_" + String(SPREADING_FACTOR);
+    
+    File myFile10 = SD.open("/datalog/" + namaFile + ".txt", FILE_APPEND);
+    if (myFile10) {
+      myFile10.print(now.getYear(), DEC);
+      myFile10.print("-");
+      myFile10.print(now.getMonth(), DEC);
+      myFile10.print("-");
+      myFile10.print(now.getDay(), DEC);
+      myFile10.print(" ");
+      myFile10.print(now.getHour(), DEC);
+      myFile10.print(":");
+      myFile10.print(now.getMinute(), DEC);
+      myFile10.print(":");
+      myFile10.print(now.getSecond(), DEC);
+      myFile10.print(", ");
+      myFile10.print(dataMeasurement);
+      myFile10.println("");
+      myFile10.close();
+    } else {
+      Serial.println("Data log measurement error");
+    }
+}
+// ===================================================
+// End of Measurement Current

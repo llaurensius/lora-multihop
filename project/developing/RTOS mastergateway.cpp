@@ -108,7 +108,6 @@ struct LoRaMessage {
     uint8_t destinationId;
     uint8_t hopCount;      
     uint8_t messageId;
-    uint8_t lastHopId;
     char payload[32];
 } __attribute__((packed));
 
@@ -230,52 +229,45 @@ void receiveMessage(int packetSize) {
         int bytesRead = LoRa.readBytes((uint8_t*)&msg, sizeof(LoRaMessage));
         
         DEBUG_PRINTF("Received packet size: %d bytes, Read: %d bytes\n", packetSize, bytesRead);
-        DEBUG_PRINTF("Message Type: %d, Original Source: %d, Last Hop: %d, Destination: %d, Message ID: %d\n",
-                    msg.messageType, msg.sourceId, msg.lastHopId, msg.destinationId, msg.messageId);
+        DEBUG_PRINTF("Message Type: %d, Source: %d, Destination: %d, Message ID: %d\n",
+                    msg.messageType, msg.sourceId, msg.destinationId, msg.messageId);
         DEBUG_PRINTF("RSSI: %d, SNR: %.2f\n", LoRa.packetRssi(), LoRa.packetSnr());
         
         if (msg.messageType == MSG_TYPE_DATA && msg.destinationId == GATEWAY_ID) {
-            // Send ACK to the last hop node
+            // Send ACK immediately before any other processing
             DEBUG_PRINTLN("Valid data message received, sending ACK...");
-            sendAck(msg.messageId, msg.lastHopId);
+            sendAck(msg.messageId, msg.sourceId);
             
-            // Parse and store data based on original source ID
+            // Parse data berdasarkan source ID
             float val1, val2;
             parsePayload(msg.payload, &val1, &val2);
             
-            // Store data based on original source ID
+            // Simpan data sesuai dengan node pengirim
             switch(msg.sourceId) {
                 case 1:
                     node1_value1 = val1;
                     node1_value2 = val2;
-                    DEBUG_PRINTLN("Updated Node 1 values");
                     break;
                 case 2:
                     node2_value1 = val1;
                     node2_value2 = val2;
-                    DEBUG_PRINTLN("Updated Node 2 values");
                     break;
                 case 3:
                     node3_value1 = val1;
                     node3_value2 = val2;
-                    DEBUG_PRINTLN("Updated Node 3 values");
                     break;
                 case 4:
                     node4_value1 = val1;
                     node4_value2 = val2;
-                    DEBUG_PRINTLN("Updated Node 4 values");
                     break;
             }
             
             DEBUG_PRINTLN("=== Data received ===");
-            DEBUG_PRINTF("Original Source Node: %d\n", msg.sourceId);
-            DEBUG_PRINTF("Via Node: %d\n", msg.lastHopId);
+            DEBUG_PRINTF("From Node: %d\n", msg.sourceId);
             DEBUG_PRINTF("Raw payload: %s\n", msg.payload);
             DEBUG_PRINTF("Value 1: %.2f\n", val1);
             DEBUG_PRINTF("Value 2: %.2f\n", val2);
             DEBUG_PRINTLN("==================");
-            
-            blinkLED0(CRGB::Green, 1, 200); // Indicate successful reception
         }
     }
 }
