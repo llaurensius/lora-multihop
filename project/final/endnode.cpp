@@ -90,7 +90,7 @@ uint16_t calculateCRC(uint8_t *data, uint8_t len) {
 #define SYNC_WORD 0x12     
 
 // Node configuration
-#define NODE_ID 2           // Set for end node
+#define NODE_ID 4           // Set for end node
 #define GATEWAY_ID 0      // Set for gateway       
 #define MAX_HOPS 3         
 #define RETRY_COUNT 3      
@@ -169,6 +169,7 @@ void bacaDistance();
 void Datalog();
 void DatalogError();
 void DatalogRoutingTables();
+void DatalogNodeStatus();
 void ledFunction();
 void resetLoRa();
 
@@ -284,6 +285,7 @@ void loop() {
     if (millis() - lastDebugTime > DEBUG_INTERVAL) {
         printDebugInfo();
         DatalogRoutingTables();
+        DatalogNodeStatus();
         lastDebugTime = millis();
     }
     
@@ -717,6 +719,52 @@ void bacaDistance() {
     // Serial.println("Baca Distance selesai");
 }
 
+void DatalogNodeStatus() {
+    DateTime now = myRTC.now();
+
+    // Mendapatkan nilai bulan dengan format dua digit
+    String getMonthStr = now.getMonth() < 10 ? "0" + String(now.getMonth()) : String(now.getMonth());
+
+    // Mendapatkan nilai hari dengan format dua digit
+    String getDayStr = now.getDay() < 10 ? "0" + String(now.getDay()) : String(now.getDay());
+
+    // Menggabungkan semua komponen menjadi string namaFile dengan format "DDMMYYYY"
+    String namaFile = getDayStr + getMonthStr + String(now.getYear(), DEC);
+
+    File myFile10 = SD.open("/datalog/" + namaFile + "_status.txt", FILE_APPEND);
+    if (myFile10) {
+        // Write timestamp
+        myFile10.print(now.getYear(), DEC);
+        myFile10.print("-");
+        myFile10.print(now.getMonth(), DEC);
+        myFile10.print("-");
+        myFile10.print(now.getDay(), DEC);
+        myFile10.print(" ");
+        myFile10.print(now.getHour(), DEC);
+        myFile10.print(":");
+        myFile10.print(now.getMinute(), DEC);
+        myFile10.print(":");
+        myFile10.print(now.getSecond(), DEC);
+        myFile10.println();
+
+        // Write node status
+        myFile10.println("=== Node Status ===");
+        myFile10.printf("Uptime: %lu seconds\n", metrics.uptimeSeconds);
+        myFile10.printf("Messages Sent: %lu\n", metrics.messagesSent);
+        myFile10.printf("Messages Received: %lu\n", metrics.messagesReceived);
+        myFile10.printf("Messages Forwarded: %lu\n", metrics.messagesForwarded);
+        myFile10.printf("Messages Failed: %lu\n", metrics.messagesFailed);
+        myFile10.printf("Last RSSI: %d\n", metrics.lastRSSI);
+        myFile10.printf("Last SNR: %.2f\n", metrics.lastSNR);
+        myFile10.printf("Routing Table Updates: %lu\n", metrics.routingTableUpdates);
+        myFile10.println("==================");
+
+        myFile10.close();
+    } else {
+        Serial.println("error opening file for writing");
+    }
+}
+
 void DatalogRoutingTables() {
     DateTime now = myRTC.now();
 
@@ -760,6 +808,7 @@ void DatalogRoutingTables() {
                 age);
         }
         myFile10.println("==================");
+        myFile10.println();
 
         myFile10.close();
     } else {
@@ -801,7 +850,7 @@ void DatalogError() {
         myFile10.print("Distance: ");
         myFile10.print(distance_val);
         myFile10.print(" cm, ");
-        myFile10.println("RSSI: ");
+        myFile10.print("RSSI: ");
         myFile10.print(metrics.lastRSSI);
         myFile10.print(", SNR: "); 
         myFile10.print(metrics.lastSNR);
@@ -851,7 +900,7 @@ void Datalog() {
         myFile10.print("Distance: ");
         myFile10.print(distance_val);
         myFile10.print(" cm, ");
-        myFile10.println("RSSI: ");
+        myFile10.print("RSSI: ");
         myFile10.print(metrics.lastRSSI);
         myFile10.print(", SNR: "); 
         myFile10.print(metrics.lastSNR);
