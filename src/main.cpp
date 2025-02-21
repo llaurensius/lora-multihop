@@ -90,7 +90,7 @@ uint16_t calculateCRC(uint8_t *data, uint8_t len) {
 #define SYNC_WORD 0x12     
 
 // Node configuration
-#define NODE_ID 2           // Set for end node
+#define NODE_ID 4           // Set for end node
 #define GATEWAY_ID 0      // Set for gateway       
 #define MAX_HOPS 3         
 #define RETRY_COUNT 3      
