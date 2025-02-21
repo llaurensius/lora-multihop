@@ -154,7 +154,7 @@ void updateMetrics();
 void receiveMessage(int packetSize);
 bool sendMessage(LoRaMessage& msg);
 void generateRandomData(char* payload, int length);
-void fillPayload(char* payload, int length);
+void dataSensor(char* payload, int length);
 bool findRoute(uint8_t destinationId, RoutingEntry& route);
 void updateRoutingTable(uint8_t sourceId, uint8_t hopCount, int8_t rssi, float snr);
 void printDebugInfo();
@@ -263,12 +263,12 @@ void loop() {
             msg.hopCount = 0;
             msg.messageId = messageCounter++;
 
-            // Using data from sensor
+            // Using data from sensor, comment this if you want to use random data
             bacaRain();
             bacaDistance();
-            fillPayload(msg.payload, sizeof(msg.payload) - 1);
+            dataSensor(msg.payload, sizeof(msg.payload) - 1);
 
-            // Using data random
+            // Using data random, comment this if you want to use sensor data
             // generateRandomData(msg.payload, sizeof(msg.payload) - 1);
 
             DEBUG_PRINT("Sending message: ");
@@ -559,7 +559,7 @@ void updateMetrics() {
     metrics.uptimeSeconds = millis() / 1000;
 }
 
-void fillPayload(char* payload, int length) {
+void dataSensor(char* payload, int length) {
     // Isi payload dengan data yang valid
     
     snprintf(payload, length, "R:%.2f,D:%.2f", rain_val, distance_val);
