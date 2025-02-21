@@ -4,7 +4,7 @@
 #include <HTTPClient.h>
 
 // WiFi credentials
-const char* ssid = "PEMPROV JATENG";
+const char* ssid = "Wifi Magister Terapan";
 
 // NTP Server settings
 const char* ntpServer = "pool.ntp.org";
@@ -14,26 +14,9 @@ const int daylightOffset_sec = 0;
 // Create RTC object
 RTC_DS3231 rtc;
 
-void setup() {
-  Serial.begin(115200);
-  
-  // Initialize RTC
-  if (!rtc.begin()) {
-    Serial.println("Couldn't find RTC");
-    while (1);
-  }
-
-  // Connect to WiFi
-  connectToWiFi();
-
-  // Get time from NTP and update RTC
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-  updateRTCfromNTP();
-
-  // Disconnect WiFi
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_OFF);
-}
+// Forward declarations
+bool checkInternetConnection();
+void displayDateTime();
 
 void connectToWiFi() {
   Serial.printf("Connecting to %s ", ssid);
@@ -109,3 +92,24 @@ void displayDateTime() {
   // Display temperature
   Serial.printf("Temperature: %.2f°C\n", rtc.getTemperature());
 }
+
+void setup() {
+    Serial.begin(115200);
+    
+    // Initialize RTC
+    if (!rtc.begin()) {
+      Serial.println("Couldn't find RTC");
+      while (1);
+    }
+  
+    // Connect to WiFi
+    connectToWiFi();
+  
+    // Get time from NTP and update RTC
+    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+    updateRTCfromNTP();
+  
+    // Disconnect WiFi
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+  }

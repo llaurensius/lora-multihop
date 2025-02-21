@@ -90,7 +90,7 @@ uint16_t calculateCRC(uint8_t *data, uint8_t len) {
 #define SYNC_WORD 0x12     
 
 // Node configuration
-#define NODE_ID 4           // Set for end node
+#define NODE_ID 2           // Set for end node
 #define GATEWAY_ID 0      // Set for gateway       
 #define MAX_HOPS 3         
 #define RETRY_COUNT 3      
@@ -154,6 +154,7 @@ void updateMetrics();
 void receiveMessage(int packetSize);
 bool sendMessage(LoRaMessage& msg);
 void generateRandomData(char* payload, int length);
+void fillPayload(char* payload, int length);
 bool findRoute(uint8_t destinationId, RoutingEntry& route);
 void updateRoutingTable(uint8_t sourceId, uint8_t hopCount, int8_t rssi, float snr);
 void printDebugInfo();
@@ -261,9 +262,15 @@ void loop() {
             msg.destinationId = GATEWAY_ID;
             msg.hopCount = 0;
             msg.messageId = messageCounter++;
-            
-            // Uncomment to using actual data
-            generateRandomData(msg.payload, sizeof(msg.payload) - 1);
+
+            // Using data from sensor
+            bacaRain();
+            bacaDistance();
+            fillPayload(msg.payload, sizeof(msg.payload) - 1);
+
+            // Using data random
+            // generateRandomData(msg.payload, sizeof(msg.payload) - 1);
+
             DEBUG_PRINT("Sending message: ");
             DEBUG_PRINTLN(msg.payload);
             
@@ -550,6 +557,12 @@ void printDebugInfo() {
 
 void updateMetrics() {
     metrics.uptimeSeconds = millis() / 1000;
+}
+
+void fillPayload(char* payload, int length) {
+    // Isi payload dengan data yang valid
+    
+    snprintf(payload, length, "R:%.2f,D:%.2f", rain_val, distance_val);
 }
 
 void generateRandomData(char* payload, int length) {
