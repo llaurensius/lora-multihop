@@ -16,16 +16,6 @@
 #define DEBUG_PRINTLN(x)   if(DEBUG_MODE) { Serial.println(x); }
 #define DEBUG_PRINTF(...)  if(DEBUG_MODE) { Serial.printf(__VA_ARGS__); }
 
-// Measurement Current
-// ===================================================
-SoftwareSerial mySerial2(14, 0); // RX, TX
-String dataMeasurement = "";
-void dataLogMeasurement();
-// ===================================================
-// End of Measurement Current
-
-
-
 // Setup existing
 // ===================================================
 
@@ -42,7 +32,7 @@ RTClib myRTC;
 // SD Card
 const int CS = 5;
 
-// Software Serial Existing
+// Software Serial
 SoftwareSerial mySerial(16, 17);
 SoftwareSerial mySerial1(35, 34);
 
@@ -126,7 +116,7 @@ struct PerformanceMetrics {
     unsigned long messagesReceived;
     unsigned long messagesForwarded;
     unsigned long messagesFailed;
-    unsigned long lastRSSI;
+    int lastRSSI;
     float lastSNR;
     unsigned long uptimeSeconds;
     unsigned long routingTableUpdates;
@@ -177,6 +167,8 @@ void initSDCard();
 void bacaRain();
 void bacaDistance();
 void Datalog();
+void DatalogError();
+void DatalogRoutingTables();
 void ledFunction();
 void resetLoRa();
 
@@ -219,7 +211,6 @@ void setup() {
     Serial.begin(115200);
     mySerial.begin(9600);
     mySerial1.begin(9600);
-    mySerial2.begin(115200);
     Wire.begin();  
 
     // Fungsi LED
@@ -254,8 +245,6 @@ void setup() {
 
 void loop() {
 
-    dataLogMeasurement();
-
     ledFunction();
     int packetSize = LoRa.parsePacket();
     if (packetSize) {
@@ -272,6 +261,7 @@ void loop() {
             msg.hopCount = 0;
             msg.messageId = messageCounter++;
             
+            // Uncomment to using actual data
             generateRandomData(msg.payload, sizeof(msg.payload) - 1);
             DEBUG_PRINT("Sending message: ");
             DEBUG_PRINTLN(msg.payload);
@@ -284,6 +274,7 @@ void loop() {
             } else {
                 DEBUG_PRINTLN("Failed to send message");
                 metrics.messagesFailed++;
+                DatalogError();
             }
             
             lastSendTime = millis();
@@ -292,6 +283,7 @@ void loop() {
     
     if (millis() - lastDebugTime > DEBUG_INTERVAL) {
         printDebugInfo();
+        DatalogRoutingTables();
         lastDebugTime = millis();
     }
     
@@ -322,15 +314,7 @@ bool sendMessage(LoRaMessage& msg) {
         if (LoRa.endPacket()) {
             DEBUG_PRINTLN("Packet sent. Waiting for ACK...");
             DEBUG_PRINTF("RSSI: %d, SNR: %.2f\n", 
-/*************  ✨ Codeium Command ⭐  *************/
-/**
- * Parse string berisi credentials WiFi dan connect ke WiFi.
- * Format string: "n<ssid>xx<password>z"
- * Jika format valid, maka akan connect ke WiFi dan mengatur flag sd_isi = true.
- * Jika tidak valid, maka tidak ada aksi apapun.
- * @param input string berisi credentials WiFi
- */
-/******  f0eb80f7-8350-456e-a14a-d9bfeb017840  *******/                        LoRa.packetRssi(),
+                        LoRa.packetRssi(),
                         LoRa.packetSnr());
             if (msg.messageType == MSG_TYPE_DATA) {
                 if (waitForAck(msg.messageId)) {
@@ -733,6 +717,107 @@ void bacaDistance() {
     // Serial.println("Baca Distance selesai");
 }
 
+void DatalogRoutingTables() {
+    DateTime now = myRTC.now();
+
+    // Mendapatkan nilai bulan dengan format dua digit
+    String getMonthStr = now.getMonth() < 10 ? "0" + String(now.getMonth()) : String(now.getMonth());
+
+    // Mendapatkan nilai hari dengan format dua digit
+    String getDayStr = now.getDay() < 10 ? "0" + String(now.getDay()) : String(now.getDay());
+
+    // Menggabungkan semua komponen menjadi string namaFile dengan format "DDMMYYYY"
+    String namaFile = getDayStr + getMonthStr + String(now.getYear(), DEC);
+
+    File myFile10 = SD.open("/datalog/" + namaFile + "_routing.txt", FILE_APPEND);
+    if (myFile10) {
+        // Write timestamp
+        myFile10.print(now.getYear(), DEC);
+        myFile10.print("-");
+        myFile10.print(now.getMonth(), DEC);
+        myFile10.print("-");
+        myFile10.print(now.getDay(), DEC);
+        myFile10.print(" ");
+        myFile10.print(now.getHour(), DEC);
+        myFile10.print(":");
+        myFile10.print(now.getMinute(), DEC);
+        myFile10.print(":");
+        myFile10.print(now.getSecond(), DEC);
+        myFile10.println();
+
+        // Write routing table header
+        myFile10.println("=== Routing Table ===");
+        myFile10.println("Dest\tHops\tRSSI\tSNR\tAge(s)");
+
+        // Write routing table entries
+        for (int i = 0; i < routingTableSize; i++) {
+            unsigned long age = (millis() - routingTable[i].lastUpdate) / 1000;
+            myFile10.printf("%d\t%d\t%d\t%.1f\t%lu\n",
+                routingTable[i].destinationId,
+                routingTable[i].hopCount,
+                routingTable[i].lastRSSI,
+                routingTable[i].lastSNR,
+                age);
+        }
+        myFile10.println("==================");
+
+        myFile10.close();
+    } else {
+        Serial.println("error opening file for writing");
+    }
+}
+
+void DatalogError() {
+    DateTime now = myRTC.now();
+
+    // Mendapatkan nilai bulan dengan format dua digit
+    String getMonthStr = now.getMonth() < 10 ? "0" + String(now.getMonth()) : String(now.getMonth());
+
+    // Mendapatkan nilai hari dengan format dua digit
+    String getDayStr = now.getDay() < 10 ? "0" + String(now.getDay()) : String(now.getDay());
+
+    // Menggabungkan semua komponen menjadi string namaFile dengan format "DDMMYYYY"
+    String namaFile = getDayStr + getMonthStr + String(now.getYear(), DEC);
+
+    File myFile10 = SD.open("/datalog/" + namaFile + "_error.txt", FILE_APPEND);
+    if (myFile10) {
+        // Write timestamp
+        myFile10.print(now.getYear(), DEC);
+        myFile10.print("-");
+        myFile10.print(now.getMonth(), DEC);
+        myFile10.print("-");
+        myFile10.print(now.getDay(), DEC);
+        myFile10.print(" ");
+        myFile10.print(now.getHour(), DEC);
+        myFile10.print(":");
+        myFile10.print(now.getMinute(), DEC);
+        myFile10.print(":");
+        myFile10.print(now.getSecond(), DEC);
+        myFile10.print(", ");
+        myFile10.print("Failed to send message: ");
+        myFile10.print("Rain: ");
+        myFile10.print(rain_val);
+        myFile10.print(" mm, ");
+        myFile10.print("Distance: ");
+        myFile10.print(distance_val);
+        myFile10.print(" cm, ");
+        myFile10.println("RSSI: ");
+        myFile10.print(metrics.lastRSSI);
+        myFile10.print(", SNR: "); 
+        myFile10.print(metrics.lastSNR);
+        myFile10.print(", ACK ID: ");
+        myFile10.print(messageCounter);
+        myFile10.print(", Routing Table Updates: ");
+        myFile10.print(metrics.routingTableUpdates);
+
+        myFile10.println("");
+        myFile10.close();
+
+    } else {
+        Serial.println("error");
+    }
+}
+
 void Datalog() {
     DateTime now = myRTC.now();
 
@@ -765,7 +850,15 @@ void Datalog() {
         myFile10.print(" mm, ");
         myFile10.print("Distance: ");
         myFile10.print(distance_val);
-        myFile10.print(" cm");
+        myFile10.print(" cm, ");
+        myFile10.println("RSSI: ");
+        myFile10.print(metrics.lastRSSI);
+        myFile10.print(", SNR: "); 
+        myFile10.print(metrics.lastSNR);
+        myFile10.print(", ACK ID: ");
+        myFile10.print(messageCounter);
+        myFile10.print(", Routing Table Updates: ");
+        myFile10.print(metrics.routingTableUpdates);
 
         myFile10.println("");
         myFile10.close();
@@ -786,50 +879,3 @@ void ledFunction() {
 }
 // ===================================================
 // End of existing function code
-
-// Measurement Current
-// ===================================================
-void dataLogMeasurement(){
-    if (mySerial2.available() > 0){
-        dataMeasurement = mySerial2.readStringUntil('\n');
-    }
-    DateTime now = myRTC.now();
-    
-    String getMonthStr = now.getMonth() < 10 ? "0" + String(now.getMonth()) : String(now.getMonth());
-    String getDayStr = now.getDay() < 10 ? "0" + String(now.getDay()) : String(now.getDay());
-    
-    // Ganti karakter yang tidak valid dengan garis bawah (_)
-    String frequencyStr = String(FREQUENCY/1E6);
-    frequencyStr.replace(".", "_"); // Ganti titik dengan garis bawah
-    String bandwidthStr = String(BANDWIDTH/1E3);
-    bandwidthStr.replace(".", "_"); // Ganti titik dengan garis bawah
-    
-    String namaFile = getDayStr + getMonthStr + String(now.getYear(), DEC) + 
-                      "_Frequency_" + frequencyStr + "MHz" + 
-                      "_Bandwidth_" + bandwidthStr + 
-                      "_TxPower_" + String(TX_POWER) + "dBm" + 
-                      "_SpreadingFactor_" + String(SPREADING_FACTOR);
-    
-    File myFile10 = SD.open("/datalog/" + namaFile + ".txt", FILE_APPEND);
-    if (myFile10) {
-      myFile10.print(now.getYear(), DEC);
-      myFile10.print("-");
-      myFile10.print(now.getMonth(), DEC);
-      myFile10.print("-");
-      myFile10.print(now.getDay(), DEC);
-      myFile10.print(" ");
-      myFile10.print(now.getHour(), DEC);
-      myFile10.print(":");
-      myFile10.print(now.getMinute(), DEC);
-      myFile10.print(":");
-      myFile10.print(now.getSecond(), DEC);
-      myFile10.print(", ");
-      myFile10.print(dataMeasurement);
-      myFile10.println("");
-      myFile10.close();
-    } else {
-      Serial.println("Data log measurement error");
-    }
-}
-// ===================================================
-// End of Measurement Current

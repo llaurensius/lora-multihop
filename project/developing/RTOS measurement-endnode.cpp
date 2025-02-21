@@ -9,12 +9,15 @@
 #include <DS3231-RTC.h>
 #include <FastLED.h>
 #include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <freertos/semphr.h>
 
 // Debug configuration
 #define DEBUG_MODE true           
-#define DEBUG_PRINT(x)     if(DEBUG_MODE) { Serial.print(x); }
-#define DEBUG_PRINTLN(x)   if(DEBUG_MODE) { Serial.println(x); }
-#define DEBUG_PRINTF(...)  if(DEBUG_MODE) { Serial.printf(__VA_ARGS__); }
+#define DEBUG_PRINT(x)     if(DEBUG_MODE) { DEBUG_PRINT_IMPL(x); }
+#define DEBUG_PRINTLN(x)   if(DEBUG_MODE) { DEBUG_PRINT_IMPL(x); Serial.println(); }
+#define DEBUG_PRINTF(...)  if(DEBUG_MODE) { DEBUG_PRINTF_IMPL(__VA_ARGS__); }
 
 // Measurement Current
 // ===================================================
@@ -24,34 +27,26 @@ void dataLogMeasurement();
 // ===================================================
 // End of Measurement Current
 
-
-
 // Setup existing
 // ===================================================
-
 // LED
 #define enTxPin     4
 #define LED_PIN     2
 #define NUM_LEDS    2
 CRGB leds[NUM_LEDS];
 int hue = 0;
-
 // RTC
 RTClib myRTC;
-
 // SD Card
 const int CS = 5;
-
 // Software Serial Existing
 SoftwareSerial mySerial(16, 17);
 SoftwareSerial mySerial1(35, 34);
-
 // Prototypes declaration functions
 uint16_t calculateCRC(uint8_t *data, uint8_t len);
 unsigned char data[4] = {};
 float rain_val;
 float distance_val;
-
 uint16_t calculateCRC(uint8_t *data, uint8_t len) {
     uint16_t crc = 0xFFFF;
     for (uint8_t i = 0; i < len; i++) {
@@ -66,16 +61,13 @@ uint16_t calculateCRC(uint8_t *data, uint8_t len) {
       }
     }
     return crc;
-  }
-
+}
 // ===================================================
 // End of existing setup
-
 // Pin definitions LoRa
 #define LORA_SCK 18
 #define LORA_MISO 19
 #define LORA_MOSI 23
-
 /*// Pin definitions for ESP32-WROOM32
 #define LORA_SS 5
 #define LORA_RST 14
@@ -91,35 +83,29 @@ uint16_t calculateCRC(uint8_t *data, uint8_t len) {
 #define LORA_RST 24
 #define LORA_DIO0 26
 //*/
-
 // LoRa parameters
 #define FREQUENCY 922E6    
 #define BANDWIDTH 125E3    
 #define SPREADING_FACTOR 7
 #define TX_POWER 20        
 #define SYNC_WORD 0x12     
-
 // Node configuration
-#define NODE_ID 1           // Set for end node
+#define NODE_ID 2           // Set for end node
 #define GATEWAY_ID 0      // Set for gateway       
 #define MAX_HOPS 3         
 #define RETRY_COUNT 3      
-
 // Message types
 #define MSG_TYPE_DATA 1
 #define MSG_TYPE_ROUTE_REQUEST 2
 #define MSG_TYPE_ROUTE_RESPONSE 3
 #define MSG_TYPE_ACK 4
-
 // Debug timing
 #define DEBUG_INTERVAL 10000  
 unsigned long lastDebugTime = 0;
-
 // Route discovery timing
 #define ROUTE_DISCOVERY_INTERVAL 60000  // 60 seconds
 unsigned long lastRouteDiscovery = 0;
 bool hasValidRoute = false;
-
 // Performance metrics
 struct PerformanceMetrics {
     unsigned long messagesSent;
@@ -131,7 +117,6 @@ struct PerformanceMetrics {
     unsigned long uptimeSeconds;
     unsigned long routingTableUpdates;
 } metrics = {0};
-
 // Message structure
 struct LoRaMessage {
     uint8_t messageType;   
@@ -141,7 +126,6 @@ struct LoRaMessage {
     uint8_t messageId;
     char payload[32];
 } __attribute__((packed));
-
 // Routing table entry structure
 struct RoutingEntry {
     uint8_t destinationId;
@@ -151,12 +135,10 @@ struct RoutingEntry {
     int8_t lastRSSI;    
     float lastSNR;      
 };
-
 // Global variables
 RoutingEntry routingTable[10];  
 uint8_t routingTableSize = 0;
 uint8_t messageCounter = 0;
-
 // Function declarations
 void printLoRaParameters();
 void printRoutingTable();
@@ -179,7 +161,20 @@ void bacaDistance();
 void Datalog();
 void ledFunction();
 void resetLoRa();
+// Prototipe fungsi RTOS
+void loraTask(void *pvParameters);
+void sensorTask(void *pvParameters);
+void powerMeasurementTask(void *pvParameters);
+void ledTask(void *pvParameters);
 
+// RTOS Task Handles dan Semaphores
+TaskHandle_t loraTaskHandle = NULL;
+TaskHandle_t sensorTaskHandle = NULL;
+TaskHandle_t powerTaskHandle = NULL;
+TaskHandle_t ledTaskHandle = NULL;
+SemaphoreHandle_t loraMutex = NULL;
+SemaphoreHandle_t sdMutex = NULL;
+SemaphoreHandle_t serialMutex = NULL;
 
 // Function to print LoRa parameters
 void printLoRaParameters() {
@@ -216,145 +211,131 @@ bool initLoRa() {
 }
 
 void setup() {
+    //============== Bagian Original yang Dipertahankan ==============//
+    // Inisialisasi serial
     Serial.begin(115200);
     mySerial.begin(9600);
     mySerial1.begin(9600);
     mySerial2.begin(115200);
-    Wire.begin();  
-
-    // Fungsi LED
+    Wire.begin();
+    
+    // Inisialisasi LED
     FastLED.addLeds<WS2812, LED_PIN, GRB>(leds, NUM_LEDS);
-    leds[0] = CRGB(0, 255, 0);      // LED 0 warna hijau dengan kecerahan penuh
-    leds[0].nscale8(255);           // Set kecerahan LED 0
+    leds[0] = CRGB(0, 255, 0);      // LED 0 hijau
     FastLED.show();
     
     // Inisialisasi SD Card
     initSDCard();
-
-    while (!Serial && millis() < 5000);
+    
+    // Tunggu serial monitor (dengan timeout)
+    unsigned long start = millis();
+    while (!Serial && (millis() - start < 5000));
     
     DEBUG_PRINTLN("\n=== LoRa Multi-Hop Node Starting ===");
     DEBUG_PRINTF("Node ID: %d\n", NODE_ID);
     
+    // Inisialisasi LoRa
     if (!initLoRa()) {
         DEBUG_PRINTLN("LoRa initialization failed!");
-        blinkLED0(CRGB::Red, 2, 500);
-        while (1) {
-            delay(1000);
-        }
+        blinkLED0(CRGB::Red, 2, 500);  // Blink LED merah 2x
     } else {
         DEBUG_PRINTLN("LoRa initialized successfully!");
     }
-
+    
     pinMode(enTxPin, OUTPUT);
     digitalWrite(enTxPin, HIGH);
-
     printLoRaParameters();
+    
+    //============== Bagian RTOS Tambahan ==============//
+    // Buat mutex untuk resource sharing
+    loraMutex = xSemaphoreCreateMutex();
+    sdMutex = xSemaphoreCreateMutex();
+    serialMutex = xSemaphoreCreateMutex();
+    
+    // Konfigurasi task priorities
+    UBaseType_t loraPriority = 3;    // Prioritas tertinggi
+    UBaseType_t sensorPriority = 2;   // Prioritas medium
+    UBaseType_t powerPriority = 2;
+    UBaseType_t ledPriority = 1;     // Prioritas terendah
+    
+    // Buat tasks
+    xTaskCreatePinnedToCore(
+        loraTask,          // Task function
+        "LoRa",            // Nama task
+        8192,              // Stack size (bytes)
+        NULL,              // Parameters
+        loraPriority,      // Priority
+        &loraTaskHandle,   // Task handle
+        0                  // Core 0
+    );
+    
+    xTaskCreatePinnedToCore(
+        sensorTask,
+        "Sensors",
+        4096,
+        NULL,
+        sensorPriority,
+        &sensorTaskHandle,
+        1                  // Core 1
+    );
+    
+    xTaskCreatePinnedToCore(
+        powerMeasurementTask,
+        "PowerMonitor",
+        4096,
+        NULL,
+        powerPriority,
+        &powerTaskHandle,
+        1
+    );
+    
+    xTaskCreatePinnedToCore(
+        ledTask,
+        "LEDController",
+        1024,
+        NULL,
+        ledPriority,
+        &ledTaskHandle,
+        1
+    );
+    
+    // Hapus task setup karena sudah tidak diperlukan
+    vTaskDelete(NULL);
 }
 
 void loop() {
-
-    dataLogMeasurement();
-
-    ledFunction();
-    int packetSize = LoRa.parsePacket();
-    if (packetSize) {
-        receiveMessage(packetSize);
-    }
-    
-    if (NODE_ID != GATEWAY_ID) {
-        static unsigned long lastSendTime = 0;
-        if (millis() - lastSendTime > 30000) {  
-            LoRaMessage msg;
-            msg.messageType = MSG_TYPE_DATA;
-            msg.sourceId = NODE_ID;
-            msg.destinationId = GATEWAY_ID;
-            msg.hopCount = 0;
-            msg.messageId = messageCounter++;
-            
-            generateRandomData(msg.payload, sizeof(msg.payload) - 1);
-            DEBUG_PRINT("Sending message: ");
-            DEBUG_PRINTLN(msg.payload);
-            
-            if (sendMessage(msg)) {
-                DEBUG_PRINTLN("Message sent successfully");
-                blinkLED0(CRGB::Blue, 2, 100);
-                metrics.messagesSent++;
-                Datalog();
-            } else {
-                DEBUG_PRINTLN("Failed to send message");
-                metrics.messagesFailed++;
-            }
-            
-            lastSendTime = millis();
-        }
-    }
-    
-    if (millis() - lastDebugTime > DEBUG_INTERVAL) {
-        printDebugInfo();
-        lastDebugTime = millis();
-    }
-    
-    updateMetrics();
-
+    // Kosongkan loop utama karena semua operasi sudah di-handle task
+    // Tetap diperlukan untuk kompatibilitas Arduino
+    vTaskDelete(NULL); // Hapus task loop yang tidak digunakan
 }
 
 bool sendMessage(LoRaMessage& msg) {
-    if (!hasValidRoute && msg.messageType == MSG_TYPE_DATA) {
-        if (millis() - lastRouteDiscovery > ROUTE_DISCOVERY_INTERVAL) {
-            initiateRouteDiscovery();
-            return false;
-        }
-    }
-    if (msg.hopCount >= MAX_HOPS) {
-        DEBUG_PRINTLN("Maximum hop count exceeded");
+    if(xSemaphoreTake(loraMutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        DEBUG_PRINTLN("LoRa TX Busy - Mutex Timeout");
         return false;
     }
     
-    for (int i = 0; i < RETRY_COUNT; i++) {
-        DEBUG_PRINTF("Transmission attempt %d/%d\n", i + 1, RETRY_COUNT);
-        DEBUG_PRINTF("Sending message - Type: %d, ID: %d, Dest: %d\n",
-            msg.messageType, msg.messageId, msg.destinationId);
-        
+    bool result = false;
+    msg.hopCount = 0; // Reset hop count
+    
+    for(int i = 0; i < RETRY_COUNT; i++) {
         LoRa.beginPacket();
         LoRa.write((uint8_t*)&msg, sizeof(LoRaMessage));
         
-        if (LoRa.endPacket()) {
-            DEBUG_PRINTLN("Packet sent. Waiting for ACK...");
-            DEBUG_PRINTF("RSSI: %d, SNR: %.2f\n", 
-/*************  ✨ Codeium Command ⭐  *************/
-/**
- * Parse string berisi credentials WiFi dan connect ke WiFi.
- * Format string: "n<ssid>xx<password>z"
- * Jika format valid, maka akan connect ke WiFi dan mengatur flag sd_isi = true.
- * Jika tidak valid, maka tidak ada aksi apapun.
- * @param input string berisi credentials WiFi
- */
-/******  f0eb80f7-8350-456e-a14a-d9bfeb017840  *******/                        LoRa.packetRssi(),
-                        LoRa.packetSnr());
-            if (msg.messageType == MSG_TYPE_DATA) {
-                if (waitForAck(msg.messageId)) {
-                    DEBUG_PRINTLN("ACK received");
-                    return true;
-                } else {
-                    DEBUG_PRINTLN("ACK not received.");
-                }
-            } else {
-                return true;
-            }
+        if(LoRa.endPacket()) {
+            DEBUG_PRINTF("TX Success - Attempt %d/%d\n", i+1, RETRY_COUNT);
+            result = true;
+            break;
         } else {
-            DEBUG_PRINTLN("LoRa.endPacket() failed!");
-            DEBUG_PRINTF("Last RSSI: %d, Last SNR: %.2f\n", 
-                        LoRa.packetRssi(),
+            DEBUG_PRINTF("TX Failed - RSSI: %d, SNR: %.1f\n", 
+                        LoRa.packetRssi(), 
                         LoRa.packetSnr());
-            // Uncomment jika ingin mencoba reset LoRa pada kegagalan
-            // resetLoRa();
         }
-        
-        delay(random(500, 1500));
+        vTaskDelay(pdMS_TO_TICKS(random(500, 1500)));
     }
     
-    return false;
+    xSemaphoreGive(loraMutex);
+    return result;
 }
 
 void parsePayload(const char* payload, float* rain_val, float* distance_val) {
@@ -604,174 +585,131 @@ void resetLoRa() {
 // ===================================================
 void blinkLED0(CRGB color, int times, int delayTime) {
     for (int i = 0; i < times; i++) {
-      leds[0] = color;
-      FastLED.show();
-      delay(delayTime);
-      leds[0] = CRGB::Black;  // Matikan LED
-      FastLED.show();
-      delay(delayTime);
+        leds[0] = color;
+        FastLED.show();
+        vTaskDelay(pdMS_TO_TICKS(delayTime));
+        leds[0] = CRGB::Black;  // Matikan LED
+        FastLED.show();
+        vTaskDelay(pdMS_TO_TICKS(delayTime));
     }
-  }
+}
 
 void initSDCard() {
-  while (true) { // Loop tak terbatas untuk mencoba inisialisasi
-    Serial.print("t0.txt=\"Initializing SD card...\"");
-
-    if (SD.begin(CS)) {
-      Serial.print("t0.txt=\"SD card initialization successful!\""); // Jika berhasil
-      break; // Keluar dari loop jika inisialisasi berhasil
-    } else {
-      Serial.print("t0.txt=\"Initialization failed! Retrying in 5 seconds...\"");
-
-      // Jika SD card gagal, LED0 berkedip merah 1 kali
-      blinkLED0(CRGB::Red, 1, 500);
-
-      // Tunggu 5 detik sebelum mencoba lagi
-      delay(5000);
+    while (true) { // Loop tak terbatas untuk mencoba inisialisasi
+        Serial.print("Initializing SD card...");
+        if (SD.begin(CS)) {
+            Serial.println("SD card initialization successful!");
+            break; // Keluar dari loop jika inisialisasi berhasil
+        } else {
+            Serial.println("Initialization failed! Retrying in 5 seconds...");
+            // Jika SD card gagal, LED0 berkedip merah 1 kali
+            blinkLED0(CRGB::Red, 1, 500);
+            // Tunggu 5 detik sebelum mencoba lagi
+            vTaskDelay(pdMS_TO_TICKS(5000));
+        }
     }
-  }
 }
 
 void bacaRain() {
-//   Serial.println("Baca Rain jalan");
-  uint8_t id = 1; // Ubah tipe data menjadi uint8_t
-
-  // Kirim permintaan baca data ke RS485
-  uint8_t buffer[] = { id, 0x03, 0x01, 0x05, 0x00, 0x01, 0x00, 0x00 };
-  uint16_t crc = calculateCRC(buffer, sizeof(buffer) - 2);
-  buffer[sizeof(buffer) - 2] = crc & 0xFF;  // LSB
-  buffer[sizeof(buffer) - 1] = crc >> 8;    // MSB
-
-  // Kirim permintaan ke RS485
-  mySerial.write(buffer, sizeof(buffer));
-
-  digitalWrite(enTxPin, LOW);  // Set ke RX mode untuk menerima balasan
-
-  // Menunggu respons dari RS485
-  unsigned long timeLimit = millis();
-  while (millis() - timeLimit < 500) {  // Tunggu hingga 500ms
-    if (mySerial.available()) {
-      byte responseHeader[8];
-
-      // Membaca 8 byte dari RS485
-      mySerial.readBytes(responseHeader, 8);
-
-      // Tampilkan balasan byte per byte di Serial Monitor
-    //   Serial.println("Balasan dari RS485:");
-      for (int i = 0; i < 8; i++) {
-        // Serial.print("Byte ");
-        // Serial.print(i);
-        // Serial.print(": 0x");
-        // Serial.println(responseHeader[i], HEX);  // Tampilkan dalam format heksadesimal
-      }
-
-      // Jika balasan sesuai (misal, id dan kode fungsi benar)
-      if (responseHeader[0] == id && responseHeader[1] == 0x03 && responseHeader[2] == 0x02) {
-        // Gabungkan byte 3 dan byte 4 menjadi satu nilai 16-bit
-        uint16_t rawValue = (responseHeader[3] << 8) | responseHeader[4];
-
-        // Simpan nilai rawValue sebagai int (tidak perlu pembagian karena ingin hasil integer)
-        rain_val = rawValue;
-
-        // Tampilkan nilai Rain di Serial Monitor
-        // Serial.print("Nilai Rain (int): ");
-        Serial.println(rain_val);
-      }
+    uint8_t id = 1; // Ubah tipe data menjadi uint8_t
+    // Kirim permintaan baca data ke RS485
+    uint8_t buffer[] = { id, 0x03, 0x01, 0x05, 0x00, 0x01, 0x00, 0x00 };
+    uint16_t crc = calculateCRC(buffer, sizeof(buffer) - 2);
+    buffer[sizeof(buffer) - 2] = crc & 0xFF;  // LSB
+    buffer[sizeof(buffer) - 1] = crc >> 8;    // MSB
+    // Kirim permintaan ke RS485
+    mySerial.write(buffer, sizeof(buffer));
+    digitalWrite(enTxPin, LOW);  // Set ke RX mode untuk menerima balasan
+    // Menunggu respons dari RS485
+    unsigned long timeLimit = millis();
+    while (millis() - timeLimit < 500) {  // Tunggu hingga 500ms
+        if (mySerial.available()) {
+            byte responseHeader[8];
+            // Membaca 8 byte dari RS485
+            mySerial.readBytes(responseHeader, 8);
+            // Jika balasan sesuai (misal, id dan kode fungsi benar)
+            if (responseHeader[0] == id && responseHeader[1] == 0x03 && responseHeader[2] == 0x02) {
+                // Gabungkan byte 3 dan byte 4 menjadi satu nilai 16-bit
+                uint16_t rawValue = (responseHeader[3] << 8) | responseHeader[4];
+                // Simpan nilai rawValue sebagai int (tidak perlu pembagian karena ingin hasil integer)
+                rain_val = rawValue;
+                // Tampilkan nilai Rain di Serial Monitor
+                Serial.println(rain_val);
+            }
+        }
     }
-  }
-
-  digitalWrite(enTxPin, HIGH);  // Set ke TX mode
-
-//   Serial.println("Baca Rain Selesai");
+    digitalWrite(enTxPin, HIGH);  // Set ke TX mode
 }
 
 void bacaDistance() {
-    // Serial.println("Baca Distance jalan");
-  
     unsigned long startTime = millis(); // Catat waktu saat mulai membaca data
-  
+    
     // Tunggu sampai data tersedia, dengan batas waktu 2 detik
     while (mySerial1.available() < 4) {
-      if (millis() - startTime >= 2000) { // Jika waktu sudah lebih dari 2 detik
-        Serial.println("ERROR: Timeout, no data received");
-        return; // Keluar dari fungsi
-      }
+        if (millis() - startTime >= 2000) { // Jika waktu sudah lebih dari 2 detik
+            Serial.println("ERROR: Timeout, no data received");
+            return; // Keluar dari fungsi
+        }
     }
-  
+    
     // Baca data sebanyak 4 byte
     for (int i = 0; i < 4; i++) {
-      data[i] = mySerial1.read();
+        data[i] = mySerial1.read();
     }
-  
+    
     // Cek jika byte pertama adalah 0xff
     if (data[0] == 0xff) {
-      int sum = (data[0] + data[1] + data[2]) & 0x00FF;  // Hitung checksum
-      if (sum == data[3]) {  // Jika checksum sesuai
-        float distance;
-        distance = (data[1] << 8) + data[2];  // Hitung jarak
-        distance_val = distance/10;
-        if (distance > 280) {  // Jika jarak di atas ambang batas 28 cm
-            
-        //   Serial.print("distance = ");
-        //   Serial.print(distance / 10);  // Konversi ke cm
-        //   Serial.println(" cm");
+        int sum = (data[0] + data[1] + data[2]) & 0x00FF;  // Hitung checksum
+        if (sum == data[3]) {  // Jika checksum sesuai
+            float distance;
+            distance = (data[1] << 8) + data[2];  // Hitung jarak
+            distance_val = distance / 10;
+            if (distance > 280) {  // Jika jarak di atas ambang batas 28 cm
+                Serial.print("distance = ");
+                Serial.print(distance / 10);  // Konversi ke cm
+                Serial.println(" cm");
+            } else {
+                Serial.println("Below the lower limit");
+            }
         } else {
-        //   Serial.println("Below the lower limit");
+            Serial.println("ERROR: Checksum mismatch");
         }
-      } else {
-        // Serial.println("ERROR: Checksum mismatch");
-      }
     } else {
-    //   Serial.println("ERROR: Invalid start byte");
+        Serial.println("ERROR: Invalid start byte");
     }
-  
+    
     // Flush untuk memastikan buffer bersih
     while (mySerial1.available()) {
-      mySerial1.read();
+        mySerial1.read();
     }
-  
-    // Serial.println("Baca Distance selesai");
 }
 
 void Datalog() {
-    DateTime now = myRTC.now();
-
-    // Mendapatkan nilai bulan dengan format dua digit
-    String getMonthStr = now.getMonth() < 10 ? "0" + String(now.getMonth()) : String(now.getMonth());
-
-    // Mendapatkan nilai hari dengan format dua digit
-    String getDayStr = now.getDay() < 10 ? "0" + String(now.getDay()) : String(now.getDay());
-
-    // Menggabungkan semua komponen menjadi string namaFile dengan format "DDMMYYYY"
-    String namaFile = getDayStr + getMonthStr + String(now.getYear(), DEC);
-
-    File myFile10 = SD.open("/datalog/" + namaFile + ".txt", FILE_APPEND);
-    if (myFile10) {
-        // Write timestamp
-        myFile10.print(now.getYear(), DEC);
-        myFile10.print("-");
-        myFile10.print(now.getMonth(), DEC);
-        myFile10.print("-");
-        myFile10.print(now.getDay(), DEC);
-        myFile10.print(" ");
-        myFile10.print(now.getHour(), DEC);
-        myFile10.print(":");
-        myFile10.print(now.getMinute(), DEC);
-        myFile10.print(":");
-        myFile10.print(now.getSecond(), DEC);
-        myFile10.print(", ");
-        myFile10.print("Rain: ");
-        myFile10.print(rain_val);
-        myFile10.print(" mm, ");
-        myFile10.print("Distance: ");
-        myFile10.print(distance_val);
-        myFile10.print(" cm");
-
-        myFile10.println("");
-        myFile10.close();
-
+    if(xSemaphoreTake(sdMutex, pdMS_TO_TICKS(250)) == pdTRUE) {
+        DateTime now = myRTC.now();
+        
+        // Format nama file dengan proteksi mutex
+        String getMonthStr = now.getMonth() < 10 ? "0" + String(now.getMonth()) : String(now.getMonth());
+        String getDayStr = now.getDay() < 10 ? "0" + String(now.getDay()) : String(now.getDay());
+        String namaFile = getDayStr + getMonthStr + String(now.getYear(), DEC);
+        
+        File myFile10 = SD.open("/datalog/" + namaFile + ".txt", FILE_APPEND);
+        if(myFile10) {
+            // Write data dengan timestamp
+            myFile10.printf("%04d-%02d-%02d %02d:%02d:%02d, Rain: %.2f mm, Distance: %.2f cm\n",
+                          now.getYear(), now.getMonth(), now.getDay(),
+                          now.getHour(), now.getMinute(), now.getSecond(),
+                          rain_val, distance_val);
+            myFile10.close();
+        } else {
+            if(xSemaphoreTake(serialMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+                Serial.println("SD Error: Failed to open file");
+                xSemaphoreGive(serialMutex);
+            }
+        }
+        xSemaphoreGive(sdMutex);
     } else {
-        Serial.println("error");
+        DEBUG_PRINTLN("Warning: SD card busy, data not logged");
     }
 }
 
@@ -784,11 +722,7 @@ void ledFunction() {
     leds[1].nscale8(100);           // Set kecerahan LED 1
     FastLED.show();
 }
-// ===================================================
-// End of existing function code
 
-// Measurement Current
-// ===================================================
 void dataLogMeasurement(){
     if (mySerial2.available() > 0){
         dataMeasurement = mySerial2.readStringUntil('\n');
@@ -812,24 +746,116 @@ void dataLogMeasurement(){
     
     File myFile10 = SD.open("/datalog/" + namaFile + ".txt", FILE_APPEND);
     if (myFile10) {
-      myFile10.print(now.getYear(), DEC);
-      myFile10.print("-");
-      myFile10.print(now.getMonth(), DEC);
-      myFile10.print("-");
-      myFile10.print(now.getDay(), DEC);
-      myFile10.print(" ");
-      myFile10.print(now.getHour(), DEC);
-      myFile10.print(":");
-      myFile10.print(now.getMinute(), DEC);
-      myFile10.print(":");
-      myFile10.print(now.getSecond(), DEC);
-      myFile10.print(", ");
-      myFile10.print(dataMeasurement);
-      myFile10.println("");
-      myFile10.close();
+        myFile10.print(now.getYear(), DEC);
+        myFile10.print("-");
+        myFile10.print(now.getMonth(), DEC);
+        myFile10.print("-");
+        myFile10.print(now.getDay(), DEC);
+        myFile10.print(" ");
+        myFile10.print(now.getHour(), DEC);
+        myFile10.print(":");
+        myFile10.print(now.getMinute(), DEC);
+        myFile10.print(":");
+        myFile10.print(now.getSecond(), DEC);
+        myFile10.print(", ");
+        myFile10.print(dataMeasurement);
+        myFile10.println("");
+        myFile10.close();
     } else {
-      Serial.println("Data log measurement error");
+        Serial.println("Data log measurement error");
     }
 }
-// ===================================================
-// End of Measurement Current
+
+//======================= RTOS TASKS =======================//
+void loraTask(void *pvParameters) {
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    
+    for(;;) {
+        // Bagian penerimaan
+        if(xSemaphoreTake(loraMutex, portMAX_DELAY)) {
+            int packetSize = LoRa.parsePacket();
+            if(packetSize) receiveMessage(packetSize);
+            xSemaphoreGive(loraMutex);
+        }
+        
+        // Bagian pengiriman periodik
+        if(NODE_ID != GATEWAY_ID) {
+            static TickType_t xLastSendTime = 0;
+            if(xTaskGetTickCount() - xLastSendTime > pdMS_TO_TICKS(30000)) {
+                LoRaMessage msg;
+                msg.messageType = MSG_TYPE_DATA;
+                msg.sourceId = NODE_ID;
+                msg.destinationId = GATEWAY_ID;
+                msg.hopCount = 0;
+                msg.messageId = messageCounter++;
+                
+                generateRandomData(msg.payload, sizeof(msg.payload) - 1);
+                DEBUG_PRINT("Sending message: ");
+                DEBUG_PRINTLN(msg.payload);
+                
+                if(sendMessage(msg)) {
+                    DEBUG_PRINTLN("Message sent successfully");
+                    blinkLED0(CRGB::Blue, 2, 100);
+                    metrics.messagesSent++;
+                    Datalog();
+                } else {
+                    DEBUG_PRINTLN("Failed to send message");
+                    metrics.messagesFailed++;
+                }
+                
+                xLastSendTime = xTaskGetTickCount();
+            }
+        }
+        
+        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(10));
+    }
+}
+
+void sensorTask(void *pvParameters) {
+    const TickType_t xFrequency = pdMS_TO_TICKS(5000);
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    
+    for(;;) {
+        bacaRain();
+        bacaDistance();
+        vTaskDelayUntil(&xLastWakeTime, xFrequency);
+    }
+}
+
+void powerMeasurementTask(void *pvParameters) {
+    for(;;) {
+        if(mySerial2.available() > 0) {
+            dataMeasurement = mySerial2.readStringUntil('\n');
+            if(xSemaphoreTake(sdMutex, pdMS_TO_TICKS(100))) {
+                dataLogMeasurement();
+                xSemaphoreGive(sdMutex);
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+}
+
+void ledTask(void *pvParameters) {
+    for(;;) {
+        ledFunction();
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+}
+
+//======================= MODIFIED DEBUG FUNCTIONS =======================//
+void DEBUG_PRINT_IMPL(String text) {
+    if(xSemaphoreTake(serialMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        Serial.print(text);
+        xSemaphoreGive(serialMutex);
+    }
+}
+
+void DEBUG_PRINTF_IMPL(const char* format, ...) {
+    if(xSemaphoreTake(serialMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        va_list args;
+        va_start(args, format);
+        vprintf(format, args);
+        va_end(args);
+        xSemaphoreGive(serialMutex);
+    }
+}
